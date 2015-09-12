@@ -87,14 +87,15 @@ def getUsbTty(rx):
     usb_ttys = glob(rx)
     return usb_ttys[0] if len(usb_ttys) == 1 else None
 
-AVR_BIN_PREFIX = None
-AVRDUDE_CONF = None
-AVR_HOME_DUDE = None
+AVR_BIN_PREFIX = "/usr/share/arduino/hardware/tools/avr/bin/"
+AVRDUDE_CONF = "/usr/share/arduino/hardware/tools/avr/etc/avrdude.conf"
+AVR_HOME_DUDE = "/usr/share/arduino/hardware/tools/avr/bin/"
+AVR_HOME = "/usr/share/arduino/hardware/tools/avr/bin/"
 
 if platform == 'darwin':
     # For MacOS X, pick up the AVR tools from within Arduino.app
     ARDUINO_HOME        = resolve_var('ARDUINO_HOME',
-                                      '/Applications/Arduino.app/Contents/Resources/Java')
+                                      '/Applications/Arduino.app/Contents/Java')
     ARDUINO_PORT        = resolve_var('ARDUINO_PORT', getUsbTty('/dev/tty.usbserial*'))
     SKETCHBOOK_HOME     = resolve_var('SKETCHBOOK_HOME', '')
     AVR_HOME            = resolve_var('AVR_HOME',
@@ -113,10 +114,10 @@ else:
     ARDUINO_PORT        = resolve_var('ARDUINO_PORT', getUsbTty('/dev/ttyUSB*'))
     SKETCHBOOK_HOME     = resolve_var('SKETCHBOOK_HOME',
                                       path.expanduser('~/share/arduino/sketchbook/'))
-    AVR_HOME            = resolve_var('AVR_HOME',
+    AVR_HOME            = resolve_var('AVR_HOME',#"/usr/bin")
                                       path.join(ARDUINO_HOME, 'hardware/tools/avr/bin'))
     AVR_HOME_DUDE       = resolve_var('AVR_HOME',
-                                      path.join(ARDUINO_HOME, 'hardware/tools/'))
+                                      path.join(ARDUINO_HOME, 'hardware/tools/avr/bin'))
 
 ARDUINO_BOARD   = resolve_var('ARDUINO_BOARD', 'atmega328')
 ARDUINO_VER     = resolve_var('ARDUINO_VER', 0) # Default to 0 if nothing is specified
@@ -129,7 +130,7 @@ if not ARDUINO_HOME:
 
 ARDUINO_CONF = path.join(ARDUINO_HOME, 'hardware/arduino/boards.txt')
 # check given board name, ARDUINO_BOARD is valid one
-arduino_boards = path.join(ARDUINO_HOME,'hardware/*/boards.txt')
+arduino_boards = path.join(ARDUINO_HOME,'hardware/arduino/*/boards.txt')
 custom_boards = path.join(SKETCHBOOK_HOME,'hardware/*/boards.txt')
 board_files = glob(arduino_boards) + glob(custom_boards)
 ptnBoard = re.compile(r'^([^#]*)\.name=(.*)')
@@ -185,7 +186,8 @@ if platform == 'darwin' or platform == 'win32':
 
 AVR_BIN_PREFIX = path.join(AVR_HOME, 'avr-')
 
-ARDUINO_LIBS = [path.join(ARDUINO_HOME, 'libraries')]
+ARDUINO_LIBS = [path.join(ARDUINO_HOME, 'hardware/arduino/avr/libraries')]
+ARDUINO_LIBS.append(path.join(ARDUINO_HOME, 'libraries'))
 if EXTRA_LIB:
     ARDUINO_LIBS.append(EXTRA_LIB)
 if SKETCHBOOK_HOME:
@@ -232,10 +234,10 @@ envArduino = Environment(CC = AVR_BIN_PREFIX + 'gcc',
                          CPPDEFINES = {'F_CPU': F_CPU, 'ARDUINO': ARDUINO_VER},
                          CFLAGS = cFlags + ['-std=gnu99'],
                          CCFLAGS = cFlags,
-                         ASFLAGS = ['-assembler-with-cpp','-mmcu=%s' % MCU],
+                         ASFLAGS = ['-x','assembler-with-cpp','-mmcu=%s' % MCU],
                          TOOLS = ['gcc','g++', 'as'])
 
-hwVariant = path.join(ARDUINO_HOME, 'hardware/arduino/variants',
+hwVariant = path.join(ARDUINO_HOME, 'hardware/arduino/avr/variants',
                      getBoardConf("build.variant", ""))
 if hwVariant:
     envArduino.Append(CPPPATH = hwVariant)
@@ -310,13 +312,14 @@ def fnCompressCore(target, source, env):
                   if x.startswith(core_prefix))
     for file in core_files:
         run([AVR_BIN_PREFIX + 'ar', 'rcs', str(target[0]), file])
+        #run([AVR_BIN_PREFIX + 'avr/bin/avr-ar', 'rcs', str(target[0]), file])
 
 def fnPrintInfo(target, source, env):
     for k in VARTAB:
         cameFrom, value = VARTAB[k]
         print "* %s: %s (%s)"%(k, value, cameFrom)
     print "* avr-size:"
-    run([AVR_BIN_PREFIX + 'size', '--target=ihex', str(source[0])])
+    #run([AVR_BIN_PREFIX + 'size', '--target=ihex', str(source[0])])
     # TODO: check binary size
     print "* maximum size for hex file: %s bytes" % getBoardConf('upload.maximum_size')
 
@@ -357,7 +360,8 @@ for line in open(TARGET + sketchExt):
     for libdir in ARDUINO_LIBS:
         for root, dirs, files in os.walk(libdir, followlinks=True):
             if filename in files:
-                libCandidates.append(path.basename(root))
+                libCandidates.append(path.relpath(root,libdir))
+print(libCandidates)
 
 # Hack. In version 20 of the Arduino IDE, the Ethernet library depends
 # implicitly on the SPI library.
@@ -368,9 +372,10 @@ all_libs_sources = []
 for index, orig_lib_dir in enumerate(ARDUINO_LIBS):
     lib_dir = 'build/lib_%02d' % index
     VariantDir(lib_dir, orig_lib_dir)
-    for libPath in ifilter(path.isdir, glob(path.join(orig_lib_dir, '*'))):
+    for libPath in ifilter(path.isdir, glob(path.join(orig_lib_dir,"*"))):
+        print(libPath+"  "+orig_lib_dir+"    "+lib_dir)
         libName = path.basename(libPath)
-        if not libName in libCandidates:
+        if not libName in map(lambda x:x.split("/")[0],libCandidates):
             continue
         envArduino.Append(CPPPATH = libPath.replace(orig_lib_dir, lib_dir))
         lib_sources = gatherSources(libPath)
@@ -378,8 +383,17 @@ for index, orig_lib_dir in enumerate(ARDUINO_LIBS):
         if path.exists(utilDir) and path.isdir(utilDir):
             lib_sources += gatherSources(utilDir)
             envArduino.Append(CPPPATH = utilDir.replace(orig_lib_dir, lib_dir))
+        srcDir = path.join(libPath, 'src')
+        if path.exists(srcDir) and path.isdir(srcDir):
+            lib_sources += gatherSources(srcDir)
+            envArduino.Append(CPPPATH = srcDir.replace(orig_lib_dir, lib_dir))
+        utilDir = path.join(libPath, 'src/utility')
+        if path.exists(utilDir) and path.isdir(utilDir):
+            lib_sources += gatherSources(utilDir)
+            envArduino.Append(CPPPATH = utilDir.replace(orig_lib_dir, lib_dir))
         lib_sources = (x.replace(orig_lib_dir, lib_dir) for x in lib_sources)
         all_libs_sources.extend(lib_sources)
+print(all_libs_sources)
 
 # Add raw sources which live in sketch dir.
 build_top = path.realpath('.')
@@ -428,16 +442,18 @@ UPLOAD_SPEED = getBoardConf('upload.speed')
 if UPLOAD_PROTOCOL == 'stk500':
     UPLOAD_PROTOCOL = 'stk500v1'
 
+def shellquote(s):
+    return "'" + s.replace("'", "'\\''") + "'"
 
 avrdudeOpts = ['-V', '-F', '-c %s' % UPLOAD_PROTOCOL, '-b %s' % UPLOAD_SPEED,
-               '-p %s' % MCU, '-P %s' % ARDUINO_PORT, '-U flash:w:$SOURCES']
+               '-p %s' % MCU, '-P %s' % shellquote(ARDUINO_PORT), '-U flash:w:$SOURCES']
 if AVRDUDE_CONF:
     avrdudeOpts.append('-C %s' % AVRDUDE_CONF)
 
-if AVR_HOME_DUDE:
-    AVR_BIN_PREFIX=AVR_HOME_DUDE
+#if AVR_HOME_DUDE:
+#    AVR_BIN_PREFIX=AVR_HOME_DUDE
 
-fuse_cmd = '%s %s' % (path.join(path.dirname(AVR_BIN_PREFIX), 'avrdude'),
+fuse_cmd = '%s %s' % (path.join(AVR_HOME_DUDE, 'avrdude'),
                       ' '.join(avrdudeOpts))
 
 upload = envArduino.Alias('upload', TARGET + '.hex', [reset_cmd, fuse_cmd])
